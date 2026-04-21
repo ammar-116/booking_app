@@ -12,11 +12,11 @@ class RoomService {
   }
 
   static List<Booking> _bookings = [
-    Booking(
-      roomId: "1",
-      startDate: DateTime(2026, 4, 10),
-      endDate: DateTime(2026, 4, 15),
-    ),
+    // Booking(
+    //   roomId: "1",
+    //   startDate: DateTime(2026, 4, 10),
+    //   endDate: DateTime(2026, 4, 15),
+    // ),
   ];
 
   static List<Booking> getBookings() {

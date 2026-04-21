@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'room_list_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class HomeScreen extends StatefulWidget {
   @override
@@ -42,8 +43,34 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Find Your Stay"),
-      ),
+  title: Text("Find Your Stay"),
+  actions: [
+    StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        final user = snapshot.data;
+
+        if (user == null) {
+          // 🔐 NOT LOGGED IN
+          return TextButton(
+            onPressed: () {
+              Navigator.pushNamed(context, "/login");
+            },
+            child: Text("Login", style: TextStyle(color: Colors.blue)),
+          );
+        } else {
+          // 🔓 LOGGED IN
+          return TextButton(
+            onPressed: () {
+              FirebaseAuth.instance.signOut();
+            },
+            child: Text("Logout", style: TextStyle(color: Colors.red)),
+          );
+        }
+      },
+    )
+  ],
+),
       body: Padding(
         padding: EdgeInsets.all(20),
         child: Column(
