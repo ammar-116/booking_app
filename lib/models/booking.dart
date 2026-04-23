@@ -1,13 +1,16 @@
 class Booking {
-  final String? id; // 🔥 Firestore document ID
+  final String? id;
   final String roomId;
   final String userId;
   final DateTime startDate;
   final DateTime endDate;
-
-  String status;
-  String paymentType;
+  String status; // pending, confirmed, cancelled
+  String paymentType; // cash, bank
   bool isApproved;
+  double? advanceAmount;
+  bool advancePaid;
+  String? discountLabel;
+  double? discountPercent;
 
   Booking({
     this.id,
@@ -18,6 +21,10 @@ class Booking {
     required this.paymentType,
     this.status = "pending",
     this.isApproved = false,
+    this.advanceAmount,
+    this.advancePaid = false,
+    this.discountLabel,
+    this.discountPercent,
   });
 
   Map<String, dynamic> toMap() {
@@ -29,6 +36,10 @@ class Booking {
       "status": status,
       "paymentType": paymentType,
       "isApproved": isApproved,
+      "advanceAmount": advanceAmount,
+      "advancePaid": advancePaid,
+      "discountLabel": discountLabel,
+      "discountPercent": discountPercent,
     };
   }
 
@@ -40,8 +51,12 @@ class Booking {
       startDate: (map['startDate']).toDate(),
       endDate: (map['endDate']).toDate(),
       status: map['status'] ?? "pending",
-      paymentType: map['paymentType'],
+      paymentType: map['paymentType'] ?? "cash",
       isApproved: map['isApproved'] ?? false,
+      advanceAmount: (map['advanceAmount'] as num?)?.toDouble(),
+      advancePaid: map['advancePaid'] ?? false,
+      discountLabel: map['discountLabel'],
+      discountPercent: (map['discountPercent'] as num?)?.toDouble(),
     );
   }
 }

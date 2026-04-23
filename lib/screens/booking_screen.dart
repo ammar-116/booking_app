@@ -1,18 +1,22 @@
 import 'package:flutter/material.dart';
+import '../../theme/app_theme.dart';
 import '../../models/room.dart';
 import '../../models/booking.dart';
 import '../../services/booking_service.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import '../../services/discount_service.dart';
+import 'payment_screen.dart';
 
 class BookingScreen extends StatefulWidget {
   final Room room;
   final DateTime startDate;
   final DateTime endDate;
+  final Discount? discount;
 
-  BookingScreen({
+  const BookingScreen({
     required this.room,
     required this.startDate,
     required this.endDate,
+    this.discount,
   });
 
   @override
@@ -21,7 +25,6 @@ class BookingScreen extends StatefulWidget {
 
 class _BookingScreenState extends State<BookingScreen> {
   final bookingService = BookingService();
-
   List<Booking> roomBookings = [];
   bool isLoading = true;
 
@@ -33,22 +36,14 @@ class _BookingScreenState extends State<BookingScreen> {
 
   void loadBookings() async {
     final allBookings = await bookingService.getBookingsOnce();
-
     roomBookings = allBookings
-        .where((b) => b.roomId == widget.room.id)
+        .where((b) => b.roomId == widget.room.id && b.status != "cancelled")
         .toList();
-
-    setState(() {
-      isLoading = false;
-    });
+    setState(() => isLoading = false);
   }
 
-  // ---------------------------
-  // CORE OVERLAP CHECK
-  // ---------------------------
-  bool isOverlapping(DateTime s1, DateTime e1, DateTime s2, DateTime e2) {
-    return s1.isBefore(e2) && e1.isAfter(s2);
-  }
+  bool isOverlapping(DateTime s1, DateTime e1, DateTime s2, DateTime e2) =>
+      s1.isBefore(e2) && e1.isAfter(s2);
 
   bool isFullyAvailable() {
     for (var b in roomBookings) {
@@ -57,19 +52,14 @@ class _BookingScreenState extends State<BookingScreen> {
         widget.endDate,
         b.startDate,
         b.endDate,
-      )) {
+      ))
         return false;
-      }
     }
     return true;
   }
 
-  // ---------------------------
-  // FIND AVAILABLE SUB-RANGES
-  // ---------------------------
   List<String> getAvailableSlots() {
-    List<DateTime> blockedDates = [];
-
+    List<List<DateTime>> intervals = [];
     for (var b in roomBookings) {
       if (isOverlapping(
         widget.startDate,
@@ -77,174 +67,324 @@ class _BookingScreenState extends State<BookingScreen> {
         b.startDate,
         b.endDate,
       )) {
-        blockedDates.add(b.startDate);
-        blockedDates.add(b.endDate);
+        DateTime s = b.startDate.isBefore(widget.startDate)
+            ? widget.startDate
+            : b.startDate;
+        DateTime e = b.endDate.isAfter(widget.endDate)
+            ? widget.endDate
+            : b.endDate;
+        intervals.add([s, e]);
       }
     }
+    if (intervals.isEmpty) return [];
 
-    blockedDates.sort();
+    intervals.sort((a, b) => a[0].compareTo(b[0]));
+    List<List<DateTime>> merged = [intervals.first];
+    for (var i = 1; i < intervals.length; i++) {
+      final last = merged.last;
+      final curr = intervals[i];
+      if (!curr[0].isAfter(last[1])) {
+        if (curr[1].isAfter(last[1])) last[1] = curr[1];
+      } else {
+        merged.add(curr);
+      }
+    }
 
     List<String> suggestions = [];
-
-    DateTime current = widget.startDate;
-
-    for (var i = 0; i < blockedDates.length; i += 2) {
-      DateTime blockStart = blockedDates[i];
-      DateTime blockEnd = blockedDates[i + 1];
-
-      if (current.isBefore(blockStart)) {
-        suggestions.add(
-          "${current.toString().split(' ')[0]} → ${blockStart.toString().split(' ')[0]}",
-        );
+    DateTime cursor = widget.startDate;
+    for (var block in merged) {
+      if (cursor.isBefore(block[0])) {
+        suggestions.add("${formatDate(cursor)} → ${formatDate(block[0])}");
       }
-
-      current = blockEnd;
+      cursor = block[1];
     }
-
-    if (current.isBefore(widget.endDate)) {
-      suggestions.add(
-        "${current.toString().split(' ')[0]} → ${widget.endDate.toString().split(' ')[0]}",
-      );
+    if (cursor.isBefore(widget.endDate)) {
+      suggestions.add("${formatDate(cursor)} → ${formatDate(widget.endDate)}");
     }
-
     return suggestions;
   }
 
-  String formatDate(DateTime date) {
-    return date.toLocal().toString().split(' ')[0];
-  }
+  String formatDate(DateTime date) => date.toLocal().toString().split(' ')[0];
 
-  double getTotalPrice() {
-    return widget.endDate.difference(widget.startDate).inDays *
-        widget.room.price;
-  }
+  double get totalPrice => DiscountService.getTotalPrice(
+    pricePerNight: widget.room.price,
+    startDate: widget.startDate,
+    endDate: widget.endDate,
+    discountPercent: widget.discount?.percent ?? 0,
+  );
+
+  double get advanceAmount => DiscountService.getAdvanceAmount(totalPrice);
+
+  int get nights => widget.endDate.difference(widget.startDate).inDays;
 
   @override
   Widget build(BuildContext context) {
+    if (isLoading) {
+      return const Scaffold(
+        backgroundColor: AppColors.cream,
+        body: Center(
+          child: CircularProgressIndicator(color: AppColors.forestGreen),
+        ),
+      );
+    }
+
     final available = isFullyAvailable();
     final suggestions = getAvailableSlots();
 
     return Scaffold(
-      appBar: AppBar(title: Text("Booking Check")),
-
-      body: isLoading
-          ? Center(child: CircularProgressIndicator())
-
-          : Padding(
-              padding: EdgeInsets.all(20),
+      backgroundColor: AppColors.cream,
+      appBar: AppBar(
+        title: Text('Review Booking', style: AppTextStyles.titleLarge),
+        leading: IconButton(
+          icon: const Icon(
+            Icons.arrow_back_ios,
+            size: 18,
+            color: AppColors.inkBlack,
+          ),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Room summary card
+            Container(
+              decoration: AppDecorations.card,
+              padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    "${widget.room.type} Room",
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-
-                  SizedBox(height: 10),
-
-                  Text(
-                    "Requested: ${formatDate(widget.startDate)} → ${formatDate(widget.endDate)}",
-                  ),
-
-                  SizedBox(height: 20),
-
-                  Divider(),
-
-                  SizedBox(height: 10),
-
-                  // ---------------------------
-                  // STATUS SECTION
-                  // ---------------------------
-                  if (available)
-                    Container(
-                      padding: EdgeInsets.all(12),
-                      color: Colors.green.shade100,
-                      child: Text(
-                        "✅ Room is fully available for selected dates",
-                        style: TextStyle(color: Colors.green),
+                  Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: AppColors.lightSage,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.bed_outlined,
+                          color: AppColors.forestGreen,
+                          size: 24,
+                        ),
                       ),
-                    )
-                  else
-                    Container(
-                      padding: EdgeInsets.all(12),
-                      color: Colors.red.shade100,
-                      child: Text(
-                        "❌ Room is NOT fully available for selected dates",
-                        style: TextStyle(color: Colors.red),
-                      ),
-                    ),
-
-                  SizedBox(height: 20),
-
-                  // ---------------------------
-                  // SUGGESTIONS
-                  // ---------------------------
-                  if (!available) ...[
-                    Text(
-                      "Available alternative slots:",
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    SizedBox(height: 10),
-
-                    ...suggestions.map(
-                      (s) => Text("• $s"),
-                    ),
-                  ],
-
-                  Spacer(),
-
-                  // ---------------------------
-                  // BOOKING BUTTON BLOCKED IF NOT AVAILABLE
-                  // ---------------------------
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: available
-                          ? () {
-                              final user =
-                                  FirebaseAuth.instance.currentUser;
-
-                              if (user == null) {
-                                Navigator.pushNamed(context, "/login");
-                                return;
-                              }
-
-                              bookingService.addBooking(
-                                Booking(
-                                  roomId: widget.room.id,
-                                  userId: user.uid,
-                                  startDate: widget.startDate,
-                                  endDate: widget.endDate,
-                                  paymentType: "pending",
-                                  status: "pending",
-                                  isApproved: false,
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${widget.room.type} Room',
+                              style: AppTextStyles.titleMedium,
+                            ),
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.location_on_outlined,
+                                  size: 13,
+                                  color: AppColors.warmGrey,
                                 ),
-                              );
-
-                              showDialog(
-                                context: context,
-                                builder: (_) => AlertDialog(
-                                  title: Text("Booking Created"),
-                                  content: Text(
-                                    "Your booking request has been submitted.",
+                                const SizedBox(width: 3),
+                                Expanded(
+                                  child: Text(
+                                    widget.room.address,
+                                    style: AppTextStyles.bodyMedium.copyWith(
+                                      fontSize: 12,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
-                              );
-                            }
-                          : null,
-                      child: Text(
-                        available
-                            ? "Confirm Booking"
-                            : "Change Dates to Continue",
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  const Divider(height: 1),
+                  const SizedBox(height: 16),
+
+                  // Dates
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.calendar_today_outlined,
+                        size: 15,
+                        color: AppColors.warmGrey,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        "${formatDate(widget.startDate)}  →  ${formatDate(widget.endDate)}",
+                        style: AppTextStyles.bodyLarge,
+                      ),
+                      const Spacer(),
+                      AppBadge(label: '$nights nights'),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Pricing
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Price per night', style: AppTextStyles.bodyMedium),
+                      Text(
+                        'Rs ${widget.room.price.toStringAsFixed(0)}',
+                        style: AppTextStyles.bodyLarge,
+                      ),
+                    ],
+                  ),
+                  if (widget.discount != null) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '${widget.discount!.label} (${widget.discount!.percent.toStringAsFixed(0)}% off)',
+                          style: AppTextStyles.bodyMedium.copyWith(
+                            color: AppColors.success,
+                          ),
+                        ),
+                        Text(
+                          '- Rs ${(widget.room.price * nights * widget.discount!.percent / 100).toStringAsFixed(0)}',
+                          style: AppTextStyles.bodyMedium.copyWith(
+                            color: AppColors.success,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  const Divider(height: 1),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Total', style: AppTextStyles.titleMedium),
+                      Text(
+                        'Rs ${totalPrice.toStringAsFixed(0)}',
+                        style: AppTextStyles.titleMedium.copyWith(
+                          color: AppColors.forestGreen,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Advance (20%)', style: AppTextStyles.bodyMedium),
+                      Text(
+                        'Rs ${advanceAmount.toStringAsFixed(0)}',
+                        style: AppTextStyles.bodyLarge.copyWith(
+                          color: AppColors.forestGreen,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Availability status
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: available
+                  ? AppDecorations.infoBanner
+                  : BoxDecoration(
+                      color: AppColors.error.withOpacity(0.07),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppColors.error.withOpacity(0.3),
+                      ),
+                    ),
+              child: Row(
+                children: [
+                  Icon(
+                    available
+                        ? Icons.check_circle_outline
+                        : Icons.cancel_outlined,
+                    color: available ? AppColors.success : AppColors.error,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      available
+                          ? "Room is fully available for your selected dates"
+                          : "Room is not fully available for selected dates",
+                      style: AppTextStyles.bodyLarge.copyWith(
+                        color: available ? AppColors.success : AppColors.error,
                       ),
                     ),
                   ),
                 ],
               ),
             ),
+
+            // Alternative slots
+            if (!available && suggestions.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              AppSectionHeader(
+                title: 'Available Slots',
+                subtitle: 'Alternative dates for this room',
+              ),
+              const SizedBox(height: 12),
+              ...suggestions.map(
+                (s) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.arrow_right,
+                        color: AppColors.forestGreen,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(s, style: AppTextStyles.bodyLarge),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 24),
+
+            // Confirm button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: available
+                    ? () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => PaymentScreen(
+                              room: widget.room,
+                              startDate: widget.startDate,
+                              endDate: widget.endDate,
+                              discount: widget.discount,
+                            ),
+                          ),
+                        );
+                      }
+                    : null,
+                child: Text(
+                  available ? "Proceed to Payment" : "Change Dates to Continue",
+                ),
+              ),
+            ),
+            SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+          ],
+        ),
+      ),
     );
   }
 }
